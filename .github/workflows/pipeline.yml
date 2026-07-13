@@ -36,9 +36,20 @@ jobs:
       - name: Install dependencies
         run: npm install
 
+      # On an initial push (and after some force-pushes) github.event.before is
+      # the all-zero SHA, which is not a resolvable revision — linting the range
+      # would abort with "Invalid revision range". Fall back to the head commit.
       - name: Lint commit messages
         run: |
-          npx commitlint --from ${{ github.event.before }} --to ${{ github.sha }} --verbose
+          FROM_SHA="${{ github.event.before }}"
+          if [ -z "$FROM_SHA" ] \
+             || [ "$FROM_SHA" = "0000000000000000000000000000000000000000" ] \
+             || ! git cat-file -e "${FROM_SHA}^{commit}" 2>/dev/null; then
+            echo "No usable base commit ($FROM_SHA) — linting HEAD only."
+            npx commitlint --last --verbose
+          else
+            npx commitlint --from "$FROM_SHA" --to "${{ github.sha }}" --verbose
+          fi
 
   # ─── GATE 2: Versioning (main and beta) ────────────────────────────
   release:
