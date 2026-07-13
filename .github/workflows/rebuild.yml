@@ -86,7 +86,9 @@ jobs:
         with:
           context: .
           target: runtime
-          platforms: linux/amd64,linux/arm64
+          # Keep in step with pipeline.yml: amd64 only until zeromq's native
+          # addon can be built for arm64 on a native runner.
+          platforms: linux/amd64
           push: true
           build-args: |
             BUILD_DATE=${{ github.event.repository.updated_at }}
