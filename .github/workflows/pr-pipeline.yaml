@@ -1,0 +1,145 @@
+# .github/workflows/pr-pipeline.yaml
+name: PR Validation
+
+on:
+  pull_request:
+    branches: [main, beta]
+
+jobs:
+  # ─── Gate 1: Code Quality ──────────────────────────────────────────
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Lint Dockerfile
+        uses: hadolint/hadolint-action@v3.3.0
+        with:
+          dockerfile: Dockerfile
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Lint commit messages
+        run: |
+          npx commitlint --from ${{ github.event.pull_request.base.sha }} --to ${{ github.event.pull_request.head.sha }} --verbose
+
+      - name: Validate semantic release configuration
+        run: ./scripts/validate-release-config.sh
+
+  # ─── Gate 2: Semantic Release Config Check ─────────────────────────
+  # Validates .releaserc parses and the plugin chain loads. Publishes nothing:
+  # --dry-run stops semantic-release itself, --no-ci bypasses the PR guard.
+  release-check:
+    needs: lint
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # Full history required: semantic-release walks commits back to the
+          # last tag to compute the next version.
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Validate semantic-release config
+        run: |
+          npx semantic-release --dry-run --no-ci
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ─── Gate 3: Build + Integration Tests + Security Scan ────────────
+  build-test:
+    needs: [lint, release-check]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Build image (local only — no push)
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          target: runtime
+          push: false
+          load: true
+          build-args: |
+            BUILD_DATE=${{ github.event.repository.updated_at }}
+            VCS_REF=${{ github.sha }}
+          tags: public-pool:pr-test
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # ── Integration Tests ─────────────────────────────────────────
+      # Boots the container and asserts non-root, stratum bind, and API health.
+      - name: Run integration tests
+        env:
+          IMAGE: public-pool:pr-test
+          DEBUG: '1'
+        run: ./tests/integration/test-public-pool.sh
+
+      # ── Security Scan ─────────────────────────────────────────────
+      - name: Run Trivy
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: public-pool:pr-test
+          format: sarif
+          output: trivy-results.sarif
+          severity: CRITICAL,HIGH
+          exit-code: '0'
+
+      - name: Check for critical vulnerabilities
+        run: |
+          CRITICAL_COUNT=$(grep -o '"level":"error"' trivy-results.sarif | wc -l)
+          if [ "$CRITICAL_COUNT" -gt 0 ]; then
+            echo "❌ Found $CRITICAL_COUNT critical vulnerabilities"
+            exit 1
+          fi
+
+      - name: Upload Trivy results to Security tab
+        uses: github/codeql-action/upload-sarif@v4
+        if: success() || failure()
+        with:
+          sarif_file: trivy-results.sarif
+          category: trivy-main
+
+      # ── SBOM ──────────────────────────────────────────────────────
+      - name: Generate SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          image: public-pool:pr-test
+          format: spdx-json
+          output-file: sbom.spdx.json
+
+      - name: Validate SBOM
+        run: |
+          PACKAGE_COUNT=$(jq '.packages | length' sbom.spdx.json)
+          echo "✅ SBOM contains $PACKAGE_COUNT packages"
+          [ "$PACKAGE_COUNT" -ge 1 ] || { echo "❌ SBOM has no packages"; exit 1; }
+
+      - name: Upload SBOM as PR artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: sbom-pr-${{ github.event.pull_request.number }}
+          path: sbom.spdx.json
+          retention-days: 7

@@ -1,0 +1,360 @@
+name: CI_CD
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to rebuild (e.g., v1.2.0)'
+        required: false
+  push:
+    branches: [main, beta]
+    tags: ['v*']
+
+concurrency:
+  group: cicd-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # ─── GATE 1: Code Quality ─────────────────────────────────────────
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Lint Dockerfile
+        uses: hadolint/hadolint-action@v3.3.0
+        with:
+          dockerfile: Dockerfile
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Lint commit messages
+        run: |
+          npx commitlint --from ${{ github.event.before }} --to ${{ github.sha }} --verbose
+
+  # ─── GATE 2: Versioning (main and beta) ────────────────────────────
+  release:
+    needs: lint
+    runs-on: ubuntu-latest
+    if: (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/beta') && !contains(github.actor, 'github-actions[bot]')
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+      packages: write
+      id-token: write
+    outputs:
+      new_release_published: ${{ steps.final-status.outputs.new_release_published }}
+      new_release_version: ${{ steps.final-status.outputs.new_release_version }}
+    steps:
+      - name: Generate bot app token
+        id: generate_token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ secrets.TITAN_RELEASER_ID }}
+          private-key: ${{ secrets.TITAN_RELEASER_PRIVATE_KEY }}
+
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+
+      - name: Import GPG key
+        run: echo -n "$TITAN_RELEASER_BASE64_GPG_KEY" | base64 --decode | gpg --batch --import
+        env:
+          TITAN_RELEASER_BASE64_GPG_KEY: ${{ secrets.TITAN_RELEASER_BASE64_GPG_KEY }}
+
+      - name: Run program that passes the GPG passphrase to the GPG CLI
+        run: |
+          rm -rf /tmp/gpg.sh
+          echo '#!/bin/bash' >> /tmp/gpg.sh
+          echo 'gpg --batch --pinentry-mode=loopback --passphrase $TITAN_RELEASER_GPG_PASSPHRASE $@' >> /tmp/gpg.sh
+          chmod +x /tmp/gpg.sh
+
+      - name: Configure GPG for automated release commits
+        run: |
+          git config commit.gpgsign true
+          git config user.signingkey $TITAN_RELEASER_GPG_KEY_ID
+          git config gpg.program /tmp/gpg.sh
+        env:
+          TITAN_RELEASER_GPG_KEY_ID: ${{ secrets.TITAN_RELEASER_GPG_KEY_ID }}
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Run semantic-release
+        id: semantic
+        env:
+          TITAN_RELEASER_GPG_PASSPHRASE: ${{ secrets.TITAN_RELEASER_GPG_PASSPHRASE }}
+          GH_TOKEN: ${{ steps.generate_token.outputs.token }}
+          GIT_AUTHOR_NAME: s-release[bot]
+          GIT_AUTHOR_EMAIL: ${{ secrets.TITAN_RELEASER_EMAIL }}
+          GIT_COMMITTER_NAME: s-release[bot]
+          GIT_COMMITTER_EMAIL: ${{ secrets.TITAN_RELEASER_EMAIL }}
+        run: |
+          npx semantic-release 2>&1 | tee /tmp/semantic-output.txt
+          VERSION=$(grep -oP 'Published release \K[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?' /tmp/semantic-output.txt || echo "")
+          if [ -n "$VERSION" ]; then
+            echo "new_release_published=true" >> $GITHUB_OUTPUT
+            echo "new_release_version=$VERSION" >> $GITHUB_OUTPUT
+          else
+            echo "new_release_published=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Login to GitHub Container Registry
+        if: steps.semantic.outputs.new_release_published != 'true'
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install Cosign
+        if: steps.semantic.outputs.new_release_published != 'true'
+        uses: sigstore/cosign-installer@v3
+
+      # If no new release was cut, the latest tag may still be missing a valid
+      # signature or SBOM attestation (e.g. an interrupted earlier run). Detect
+      # that and rebuild rather than leaving an unsigned image published.
+      - name: Check and verify existing release status
+        id: checker
+        if: steps.semantic.outputs.new_release_published != 'true'
+        run: |
+          LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+          if [ -z "$LATEST_TAG" ]; then
+            echo "No existing release tags found."
+            echo "rebuild=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          VERSION=${LATEST_TAG#v}
+          echo "Latest tag found: $LATEST_TAG (version: $VERSION)"
+
+          REBUILD=false
+
+          if ! cosign verify \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            --certificate-identity-regexp "https://github.com/${{ github.repository }}" \
+            ghcr.io/${{ github.repository }}:v$VERSION >/dev/null 2>&1; then
+              echo "⚠️ Image signature check failed or image not found."
+              REBUILD=true
+          fi
+
+          if [ "$REBUILD" = "false" ] && ! cosign verify-attestation \
+            --type spdxjson \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            --certificate-identity-regexp "https://github.com/${{ github.repository }}" \
+            ghcr.io/${{ github.repository }}:v$VERSION >/dev/null 2>&1; then
+              echo "⚠️ SBOM attestation check failed or attestation not found."
+              REBUILD=true
+          fi
+
+          if [ "$REBUILD" = "true" ]; then
+            echo "🚨 Rebuild required for version $VERSION due to missing or invalid assets!"
+            echo "rebuild=true" >> $GITHUB_OUTPUT
+            echo "version=$VERSION" >> $GITHUB_OUTPUT
+          else
+            echo "✅ Version $VERSION is fully built, signed, and attested."
+            echo "rebuild=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Determine Final Release Status
+        id: final-status
+        run: |
+          if [ "${{ steps.semantic.outputs.new_release_published }}" = "true" ]; then
+            echo "new_release_published=true" >> $GITHUB_OUTPUT
+            echo "new_release_version=${{ steps.semantic.outputs.new_release_version }}" >> $GITHUB_OUTPUT
+          elif [ "${{ steps.checker.outputs.rebuild }}" = "true" ]; then
+            echo "new_release_published=true" >> $GITHUB_OUTPUT
+            echo "new_release_version=${{ steps.checker.outputs.version }}" >> $GITHUB_OUTPUT
+          else
+            echo "new_release_published=false" >> $GITHUB_OUTPUT
+          fi
+
+  # ─── GATE 3: Build (single build, capture digest) ───────────────────
+  build:
+    needs: release
+    runs-on: ubuntu-latest
+    if: needs.release.result == 'success' && needs.release.outputs.new_release_published == 'true'
+    outputs:
+      image_digest: ${{ steps.build-main.outputs.digest }}
+    permissions:
+      contents: write
+      packages: write
+      id-token: write
+      security-events: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=raw,value=v${{ needs.release.outputs.new_release_version }}
+            type=semver,pattern=v{{major}},value=${{ needs.release.outputs.new_release_version }},enable={{is_default_branch}}
+            type=semver,pattern=v{{major.minor}},value=${{ needs.release.outputs.new_release_version }},enable={{is_default_branch}}
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=beta-latest,enable=${{ github.ref_name == 'beta' }}
+
+      - name: Build and push image
+        id: build-main
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          target: runtime
+          platforms: linux/amd64,linux/arm64
+          push: true
+          build-args: |
+            BUILD_DATE=${{ github.event.repository.updated_at }}
+            VCS_REF=${{ github.sha }}
+            APP_VERSION=${{ needs.release.outputs.new_release_version }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.version=${{ needs.release.outputs.new_release_version }}
+            org.opencontainers.image.title=${{ github.event.repository.name }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Pull image for local testing
+        run: docker pull ghcr.io/${{ github.repository }}:v${{ needs.release.outputs.new_release_version }}
+
+      # ─── GATE 4: Integration Tests ────────────────────────────────
+      - name: Run integration tests
+        env:
+          IMAGE: ghcr.io/${{ github.repository }}:v${{ needs.release.outputs.new_release_version }}
+          DEBUG: '1'
+        run: ./tests/integration/test-public-pool.sh
+
+      # ─── GATE 5: Security Scan ──────────────────────────────────────
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ghcr.io/${{ github.repository }}:v${{ needs.release.outputs.new_release_version }}
+          format: sarif
+          output: trivy-results.sarif
+          severity: CRITICAL,HIGH
+          exit-code: '0'
+
+      - name: Check for critical vulnerabilities
+        run: |
+          if [ -f trivy-results.sarif ]; then
+            CRITICAL_COUNT=$(cat trivy-results.sarif | grep -o '"level":"error"' | wc -l)
+            if [ "$CRITICAL_COUNT" -gt 0 ]; then
+              echo "Found $CRITICAL_COUNT critical vulnerabilities"
+              exit 1
+            fi
+          fi
+
+      - name: Upload Trivy results to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v4
+        if: ${{ success() && hashFiles('trivy-results.sarif') }}
+        with:
+          sarif_file: trivy-results.sarif
+          category: trivy-main
+
+      # ─── GATE 6: SBOM ───────────────────────────────────────────────
+      - name: Generate SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          image: ghcr.io/${{ github.repository }}:v${{ needs.release.outputs.new_release_version }}
+          format: spdx-json
+          output-file: sbom.spdx.json
+
+      - name: Upload SBOM as artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: sbom-${{ needs.release.outputs.new_release_version }}
+          path: sbom.spdx.json
+
+  # ─── GATE 7: Attest ──────────────────────────────────────────────────
+  attest:
+    needs: [release, build]
+    runs-on: ubuntu-latest
+    if: needs.build.result == 'success'
+    permissions:
+      contents: write
+      attestations: write
+      id-token: write
+      artifact-metadata: write
+      packages: write
+    steps:
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Attest image
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-name: ghcr.io/${{ github.repository }}
+          subject-digest: ${{ needs.build.outputs.image_digest }}
+          push-to-registry: true
+          create-storage-record: true
+
+  # ─── GATE 8: Sign ─────────────────────────────────────────────────
+  sign:
+    needs: [release, build, attest]
+    runs-on: ubuntu-latest
+    if: needs.build.result == 'success' && needs.attest.result == 'success'
+    permissions:
+      id-token: write
+      packages: write
+    steps:
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Sign image by digest
+        run: |
+          cosign sign --yes \
+            ghcr.io/${{ github.repository }}@${{ needs.build.outputs.image_digest }}
+
+      - name: Download SBOM artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: sbom-${{ needs.release.outputs.new_release_version }}
+
+      - name: Attest and sign SBOM
+        run: |
+          cosign attest --yes \
+            --predicate sbom.spdx.json \
+            --type spdxjson \
+            ghcr.io/${{ github.repository }}@${{ needs.build.outputs.image_digest }}

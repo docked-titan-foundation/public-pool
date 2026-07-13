@@ -1,0 +1,55 @@
+---
+repos:
+  - repo: https://github.com/shellcheck-py/shellcheck-py
+    rev: v0.10.0.1
+    hooks:
+      - id: shellcheck
+
+  - repo: https://github.com/igorshubovych/markdownlint-cli
+    rev: v0.44.0
+    hooks:
+      - id: markdownlint
+        args: ["--ignore", "CHANGELOG.md"]
+
+  - repo: local
+    hooks:
+      - id: commitlint
+        name: commitlint
+        entry: make
+        args:
+          - commitlint
+        language: system
+        stages: [commit-msg]
+        pass_filenames: true
+      - id: docker-build
+        name: Build Docker image
+        entry: make
+        args:
+          - build
+        language: system
+        stages: [pre-commit]
+        files: ^Dockerfile$
+      - id: hadolint-main
+        name: Lint main Dockerfile
+        entry: make
+        args:
+          - hadolint
+        language: system
+        stages: [pre-commit]
+        files: ^Dockerfile$
+        pass_filenames: false
+      - id: integration-test
+        name: Run integration tests
+        entry: make
+        args:
+          - test
+        language: system
+        stages: [pre-commit]
+        always_run: true
+      - id: release-config-validate
+        name: Validate semantic release configuration
+        entry: ./scripts/validate-release-config.sh
+        language: system
+        stages: [pre-commit]
+        files: ^(\.releaserc|scripts/update-versions\.sh|README\.md|action\.yml|scripts/validate-release-config\.sh)$
+        pass_filenames: false
