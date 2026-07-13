@@ -13,5 +13,5 @@
 
 - [ ] PR targets the `beta` branch
 - [ ] Commit messages follow [Conventional Commits](../CONTRIBUTING.md#conventional-commits)
-- [ ] `make precommit` passes locally
+- [ ] `mise run precommit` passes locally
 - [ ] If Dockerfile changed: SHA256 checksums are updated and verified from the official release page

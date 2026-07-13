@@ -2,11 +2,11 @@
 set -euo pipefail
 
 # Called by semantic-release (prepareCmd) to keep the README version matrix and
-# the Makefile's local VERSION in step with the release being cut.
+# the local VERSION in .mise.toml in step with the release being cut.
 
 DOCKERFILE="Dockerfile"
 README="README.md"
-MAKEFILE="Makefile"
+MISE_CONFIG=".mise.toml"
 
 if [ -z "${1:-}" ]; then
     RELEASE_VERSION=$(git tag --sort=-v:refname | head -1 | sed 's/^v//')
@@ -18,14 +18,16 @@ else
     RELEASE_VERSION="$1"
 fi
 
-for f in "$DOCKERFILE" "$README" "$MAKEFILE"; do
+for f in "$DOCKERFILE" "$README" "$MISE_CONFIG"; do
     [ -f "$f" ] || { echo "Error: $f not found"; exit 1; }
 done
 
 # The three inputs that define what is actually inside the image.
 PUBLIC_POOL_COMMIT=$(grep -m1 'ARG PUBLIC_POOL_COMMIT=' "$DOCKERFILE" | sed 's/.*=\([^ ]*\).*/\1/')
 NODE_BASE=$(grep -m1 'ARG NODE_BASE=' "$DOCKERFILE" | sed 's/^ARG NODE_BASE=//')
-NODE_VERSION=$(echo "$NODE_BASE" | sed 's/^node:\([^@]*\).*/\1/')
+# node:24.16.0-bookworm-slim@sha256:... → 24.16.0-bookworm-slim
+NODE_VERSION="${NODE_BASE#node:}"
+NODE_VERSION="${NODE_VERSION%%@*}"
 
 for var in PUBLIC_POOL_COMMIT NODE_VERSION; do
     [ -n "${!var}" ] || { echo "Error: could not extract $var from $DOCKERFILE"; exit 1; }
@@ -61,7 +63,7 @@ else
     exit 1
 fi
 
-echo "Updating Makefile VERSION to v${RELEASE_VERSION}.local"
-sed -i -E "s/^(VERSION[[:space:]]*:=[[:space:]]*).*/\1v${RELEASE_VERSION}.local/" "$MAKEFILE"
+echo "Updating .mise.toml VERSION to v${RELEASE_VERSION}.local"
+sed -i -E "s/^(VERSION[[:space:]]*=[[:space:]]*).*/\1\"v${RELEASE_VERSION}.local\"/" "$MISE_CONFIG"
 
 exit 0

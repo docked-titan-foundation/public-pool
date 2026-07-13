@@ -120,11 +120,17 @@ docker inspect ghcr.io/docked-titan-foundation/public-pool:latest \
 
 ## 🛠️ Development
 
+Tooling is pinned in `.mise.toml`; [mise](https://mise.jdx.dev) installs it and
+runs the tasks.
+
 ```bash
-make build   # build the image locally
-make test    # build, then boot it and assert non-root + stratum + API
-make hadolint
-make precommit
+mise install          # install the pinned toolchain
+mise tasks            # list every task
+
+mise run build        # build the image locally
+mise run test         # build, then boot it and assert non-root + stratum + API
+mise run lint         # hadolint + shellcheck
+mise run precommit
 ```
 
 Upstream bumps arrive as Renovate PRs that move `ARG PUBLIC_POOL_COMMIT` in the

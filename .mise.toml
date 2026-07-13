@@ -1,0 +1,54 @@
+[tools]
+# Node powers commitlint / semantic-release; match the CI runner and the image.
+node       = "24"
+
+# Linting
+shellcheck = "0.11.0"
+
+[env]
+REGISTRY   = "ghcr.io/docked-titan-foundation"
+IMAGE_NAME = "public-pool"
+# Local build tag only — the real version comes from semantic-release. Kept in
+# step with the latest release by scripts/update-versions.sh.
+VERSION    = "v1.0.1.local"
+# Set DEBUG=1 to stream build/test output instead of only the pass/fail line.
+DEBUG      = "0"
+
+# ── Build & test ──────────────────────────────────────────────────────────────
+
+[tasks.build]
+description = "Build the image locally"
+run = "./scripts/build.sh"
+
+[tasks.test]
+description = "Build, then boot the image and assert non-root + stratum + API"
+depends = ["build"]
+run = "./scripts/test.sh"
+
+# ── Linting ───────────────────────────────────────────────────────────────────
+
+[tasks.lint]
+description = "Run all linters"
+depends = ["lint:docker", "lint:shell"]
+
+[tasks."lint:docker"]
+description = "hadolint the Dockerfile"
+run = "docker run --rm -i -v $PWD/.hadolint.yaml:/.hadolint.yaml:ro hadolint/hadolint < Dockerfile"
+
+[tasks."lint:shell"]
+description = "shellcheck every script"
+run = "mise exec -- shellcheck -x scripts/*.sh tests/integration/*.sh"
+
+# ── Release plumbing ──────────────────────────────────────────────────────────
+
+[tasks.commitlint]
+description = "Lint a commit message (pass the message file as an argument)"
+run = "npx commitlint --edit"
+
+[tasks."release:validate"]
+description = "Check the semantic-release config is parseable and the plugin chain loads"
+run = "./scripts/validate-release-config.sh"
+
+[tasks.precommit]
+description = "Run the pre-commit hooks over every file"
+run = "pre-commit run --all-files"
