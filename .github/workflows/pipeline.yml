@@ -242,7 +242,12 @@ jobs:
         with:
           context: .
           target: runtime
-          platforms: linux/amd64,linux/arm64
+          # amd64 only, for now. public-pool depends on `zeromq`, whose native
+          # addon fails to build for arm64 under QEMU emulation ("No native build
+          # was found for platform=linux arch=arm64 ... abi=137"). Restoring arm64
+          # means building it on a native arm64 runner and merging the manifests,
+          # not emulating — tracked separately.
+          platforms: linux/amd64
           push: true
           build-args: |
             BUILD_DATE=${{ github.event.repository.updated_at }}
