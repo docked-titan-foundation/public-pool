@@ -1,0 +1,11 @@
+# .dockerignore
+#
+# The build context is deliberately near-empty: the Dockerfile fetches the
+# public-pool source itself from a pinned upstream commit, so nothing in this
+# repo needs to reach the builder. Excluding everything keeps the context small
+# and makes it impossible for a stray local file to end up in the image.
+
+*
+
+# Nothing is un-ignored. If the build ever needs a file from this repo (e.g. a
+# patch to apply on top of upstream), add an explicit `!path` exception here.

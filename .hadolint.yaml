@@ -1,0 +1,17 @@
+# hadolint configuration
+# https://github.com/hadolint/hadolint/blob/master/README.md#configure
+
+failure-threshold: warning
+
+trustedRegistries:
+  - docker.io
+  - ghcr.io
+  - dl.k8s.io
+
+labelSchema:
+  author: text
+  version: semver
+
+ignored:
+  - DL3018
+  - DL3002

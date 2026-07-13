@@ -1,0 +1,209 @@
+name: Rebuild
+
+# Rebuilds the latest stable release on a weekly schedule to:
+#   - Re-scan with a fresh CVE database (new CVEs appear without code changes)
+#   - Re-attest with fresh SLSA provenance
+#   - Re-sign with Cosign (keyless certs are short-lived at signing time)
+#
+# Note: the Node base image is pinned by SHA256 digest and the public-pool
+# source by commit SHA, so a rebuild reproduces the same inputs. To pick up
+# base-image CVE patches, merge the Renovate PR that bumps the digest — that
+# triggers a full release through pipeline.yml.
+
+on:
+  schedule:
+    - cron: '0 2 * * 0'  # Weekly on Sunday at 02:00 UTC
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to rebuild (e.g., v1.0.0). Defaults to latest stable.'
+        required: false
+
+concurrency:
+  group: rebuild
+  cancel-in-progress: false
+
+jobs:
+  # ─── Resolve version to rebuild ─────────────────────────────────────────
+  resolve:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Resolve version
+        id: resolve
+        run: |
+          if [ -n "${{ inputs.version }}" ]; then
+            VERSION="${{ inputs.version }}"
+            VERSION="${VERSION#v}"
+          else
+            VERSION=$(git tag --sort=-v:refname | grep -v -- '-' | head -1 | sed 's/^v//')
+          fi
+          if [ -z "$VERSION" ]; then
+            echo "No stable release tag found."
+            exit 1
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Rebuilding version: ${VERSION}"
+
+  # ─── Build → Test → Scan → SBOM ─────────────────────────────────────────
+  build:
+    needs: resolve
+    runs-on: ubuntu-latest
+    outputs:
+      image_digest: ${{ steps.build-main.outputs.digest }}
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      security-events: write
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@v6
+        with:
+          ref: v${{ needs.resolve.outputs.version }}
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push image
+        id: build-main
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          target: runtime
+          platforms: linux/amd64,linux/arm64
+          push: true
+          build-args: |
+            BUILD_DATE=${{ github.event.repository.updated_at }}
+            VCS_REF=${{ github.sha }}
+            APP_VERSION=${{ needs.resolve.outputs.version }}
+          tags: ghcr.io/${{ github.repository }}:v${{ needs.resolve.outputs.version }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.version=${{ needs.resolve.outputs.version }}
+            org.opencontainers.image.title=${{ github.event.repository.name }}
+
+      - name: Pull image for testing
+        run: docker pull ghcr.io/${{ github.repository }}:v${{ needs.resolve.outputs.version }}
+
+      # ── Integration Tests ──────────────────────────────────────────────
+      - name: Run integration tests
+        env:
+          IMAGE: ghcr.io/${{ github.repository }}:v${{ needs.resolve.outputs.version }}
+          DEBUG: '1'
+        run: ./tests/integration/test-public-pool.sh
+
+      # ── Trivy Scan ─────────────────────────────────────────────────────
+      - name: Scan image
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ghcr.io/${{ github.repository }}:v${{ needs.resolve.outputs.version }}
+          format: sarif
+          output: trivy-results.sarif
+          severity: CRITICAL,HIGH
+          exit-code: '0'
+
+      # A rebuild exists precisely to surface newly-disclosed CVEs, so this is
+      # reported rather than fatal — the run must still re-sign and re-attest.
+      - name: Report critical vulnerabilities
+        run: |
+          COUNT=$(grep -o '"level":"error"' trivy-results.sarif 2>/dev/null | wc -l || echo 0)
+          echo "Critical/high findings: $COUNT"
+
+      - name: Upload Trivy results
+        uses: github/codeql-action/upload-sarif@v4
+        if: success() && hashFiles('trivy-results.sarif')
+        with:
+          sarif_file: trivy-results.sarif
+          category: trivy-rebuild-main
+
+      # ── SBOM ───────────────────────────────────────────────────────────
+      - name: Generate SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          image: ghcr.io/${{ github.repository }}:v${{ needs.resolve.outputs.version }}
+          format: spdx-json
+          output-file: sbom.spdx.json
+
+      - name: Upload SBOM as artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: sbom-rebuild-${{ needs.resolve.outputs.version }}
+          path: sbom.spdx.json
+
+  # ─── Attest ────────────────────────────────────────────────────────────
+  attest:
+    needs: [resolve, build]
+    runs-on: ubuntu-latest
+    if: needs.build.result == 'success'
+    permissions:
+      attestations: write
+      id-token: write
+      artifact-metadata: write
+      packages: write
+    steps:
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Attest image
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-name: ghcr.io/${{ github.repository }}
+          subject-digest: ${{ needs.build.outputs.image_digest }}
+          push-to-registry: true
+          create-storage-record: true
+
+  # ─── Sign ──────────────────────────────────────────────────────────────
+  sign:
+    needs: [resolve, build, attest]
+    runs-on: ubuntu-latest
+    if: needs.build.result == 'success' && needs.attest.result == 'success'
+    permissions:
+      id-token: write
+      packages: write
+    steps:
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Sign image by digest
+        run: |
+          cosign sign --yes \
+            ghcr.io/${{ github.repository }}@${{ needs.build.outputs.image_digest }}
+
+      - name: Download SBOM artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: sbom-rebuild-${{ needs.resolve.outputs.version }}
+
+      - name: Attest and sign SBOM
+        run: |
+          cosign attest --yes \
+            --predicate sbom.spdx.json \
+            --type spdxjson \
+            ghcr.io/${{ github.repository }}@${{ needs.build.outputs.image_digest }}
