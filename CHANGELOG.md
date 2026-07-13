@@ -1,3 +1,10 @@
+## [1.0.1](https://github.com/docked-titan-foundation/public-pool/compare/v1.0.0...v1.0.1) (2026-07-13)
+
+
+### Bug Fixes
+
+* **ci:** build amd64 only until zeromq supports emulated arm64 ([34b3486](https://github.com/docked-titan-foundation/public-pool/commit/34b3486ae3688050bda948e106b1493a3bbca139))
+
 # 1.0.0 (2026-07-13)
 
 

@@ -1,7 +1,7 @@
 # Makefile
 REGISTRY      := ghcr.io/docked-titan-foundation
 IMAGE_NAME    := public-pool
-VERSION       := v1.0.0.local
+VERSION       := v1.0.1.local
 DEBUG         ?= 0
 
 .PHONY: all build test precommit help commitlint hadolint
