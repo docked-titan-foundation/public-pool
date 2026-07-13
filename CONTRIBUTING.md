@@ -24,17 +24,26 @@ Contributions are welcome! Please read this guide to get started.
    pre-commit install
    ```
 
-3. Build the Docker image locally:
+3. Install the pinned toolchain (see `.mise.toml`):
 
    ```bash
-   make build
+   mise install
    ```
 
-4. Test the image:
+4. Build the Docker image locally:
 
    ```bash
-   make precommit
+   mise run build
    ```
+
+5. Test the image:
+
+   ```bash
+   mise run test
+   mise run precommit
+   ```
+
+   `mise tasks` lists everything available.
 
 ## Ways to Contribute
 

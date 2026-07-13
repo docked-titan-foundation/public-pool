@@ -63,22 +63,33 @@ done
 
 # ── Assertions ────────────────────────────────────────────────────────────────
 
+is_running() {
+    [ "$(docker inspect -f '{{.State.Running}}' "$CONTAINER")" = "true" ]
+}
+
+container_uid() {
+    docker exec "$CONTAINER" id -u
+}
+
+stratum_listening() {
+    docker logs "$CONTAINER" 2>&1 |
+        grep -q "Stratum server is listening on port ${STRATUM_PORT}"
+}
+
 # The container must be alive; a crash-on-boot is the failure we most care about.
-check "container is running" \
-    bash -c '[ "$(docker inspect -f "{{.State.Running}}" '"$CONTAINER"')" = "true" ]'
+check "container is running" is_running
 
 # Upstream's Dockerfile runs as root. Ours must not — this is the single most
 # important regression to catch if the Dockerfile is ever refactored.
-check "runs as non-root (uid 1000)" \
-    bash -c '[ "$(docker exec '"$CONTAINER"' id -u)" = "1000" ]'
+runs_as_node() { [ "$(container_uid)" = "1000" ]; }
+not_root()     { [ "$(container_uid)" != "0" ]; }
 
-check "does not run as root" \
-    bash -c '[ "$(docker exec '"$CONTAINER"' id -u)" != "0" ]'
+check "runs as non-root (uid 1000)" runs_as_node
+check "does not run as root" not_root
 
 # Stratum is the whole point of the image: if this port never binds, miners
 # cannot connect no matter how healthy everything else looks.
-check "stratum listener bound on ${STRATUM_PORT}" \
-    bash -c 'docker logs '"$CONTAINER"' 2>&1 | grep -q "Stratum server is listening on port '"$STRATUM_PORT"'"'
+check "stratum listener bound on ${STRATUM_PORT}" stratum_listening
 
 check "stratum port accepts TCP" \
     docker exec "$CONTAINER" node -e "

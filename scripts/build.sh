@@ -2,7 +2,8 @@
 set -e
 
 # Build script for the public-pool image
-# Usage: called from the Makefile with DEBUG, IMAGE_NAME, VERSION set.
+# Usage: `mise run build`, which supplies DEBUG, IMAGE_NAME and VERSION from
+# the [env] block in .mise.toml.
 
 DEBUG="${DEBUG:-0}"
 IMAGE_NAME="${IMAGE_NAME:-public-pool}"
