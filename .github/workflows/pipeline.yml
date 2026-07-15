@@ -253,6 +253,12 @@ jobs:
           # not emulating — tracked separately.
           platforms: linux/amd64
           push: true
+          # Don't emit buildkit's default (min) SLSA provenance attestation.
+          # Provenance is produced once, by the attest-build-provenance job
+          # (Gate 7) — the richer, keyless-signed attestation the README
+          # advertises. Leaving this true published a second, redundant
+          # provenance blob embedded in the image index.
+          provenance: false
           build-args: |
             BUILD_DATE=${{ github.event.repository.updated_at }}
             VCS_REF=${{ github.sha }}
