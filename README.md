@@ -50,6 +50,7 @@ public-pool revision baked into it.
 
 | Version | Upstream commit | Node | Date |
 |---------|-----------------|------|------|
+| 1.0.0-beta.1 (latest beta) | `96a9202c11de` | 24.16.0-bookworm-slim | 2026-07-15 |
 
 ## 🚀 Usage
 
