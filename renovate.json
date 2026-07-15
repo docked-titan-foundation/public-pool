@@ -1,13 +1,13 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": ["config:base"],
+  "extends": ["config:recommended"],
   "baseBranches": ["beta"],
+  "dependencyDashboard": true,
   "labels": ["dependencies"],
   "reviewers": ["albertoig"],
   "assignees": ["albertoig"],
   "prConcurrentLimit": 10,
   "minimumReleaseAge": "3 days",
-  "schedule": ["after 9am and before 5pm on weekdays"],
   "semanticCommits": "enabled",
   "packageRules": [
     {
@@ -44,7 +44,7 @@
     {
       "description": "Track the pinned upstream public-pool commit (upstream publishes no tags or releases).",
       "customType": "regex",
-      "fileMatch": ["^Dockerfile$"],
+      "managerFilePatterns": ["/^Dockerfile$/"],
       "matchStrings": ["ARG PUBLIC_POOL_COMMIT=(?<currentDigest>[a-f0-9]{40})"],
       "depNameTemplate": "benjamin-wilson/public-pool",
       "packageNameTemplate": "https://github.com/benjamin-wilson/public-pool",
