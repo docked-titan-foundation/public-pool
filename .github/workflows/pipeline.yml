@@ -275,10 +275,14 @@ jobs:
         run: docker pull ghcr.io/${{ github.repository }}:v${{ needs.release.outputs.new_release_version }}
 
       # ─── GATE 4: Integration Tests ────────────────────────────────
+      # WITH_REGTEST boots a throwaway bitcoind -regtest sidecar so the full
+      # mining path (getblocktemplate → stratum mining.notify) is exercised,
+      # not just container health. No chain sync — regtest is instant.
       - name: Run integration tests
         env:
           IMAGE: ghcr.io/${{ github.repository }}:v${{ needs.release.outputs.new_release_version }}
           DEBUG: '1'
+          WITH_REGTEST: '1'
         run: ./tests/integration/test-public-pool.sh
 
       # ─── GATE 5: Security Scan ──────────────────────────────────────

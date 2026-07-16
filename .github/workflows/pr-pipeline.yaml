@@ -92,10 +92,13 @@ jobs:
 
       # ── Integration Tests ─────────────────────────────────────────
       # Boots the container and asserts non-root, stratum bind, and API health.
+      # WITH_REGTEST also boots a throwaway bitcoind -regtest sidecar (no chain
+      # sync) so the full mining path — getblocktemplate → mining.notify — runs.
       - name: Run integration tests
         env:
           IMAGE: public-pool:pr-test
           DEBUG: '1'
+          WITH_REGTEST: '1'
         run: ./tests/integration/test-public-pool.sh
 
       # ── Security Scan ─────────────────────────────────────────────
