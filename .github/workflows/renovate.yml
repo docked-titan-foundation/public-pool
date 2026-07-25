@@ -8,7 +8,8 @@ name: Renovate
 #
 # Runs under a dedicated GitHub App bot. The workflow mints a short-lived
 # installation token from two repository secrets:
-#   RENOVATE_BOT_ID          — the GitHub App's App ID
+#   RENOVATE_BOT_ID          — the GitHub App's Client ID (its numeric App ID also
+#                              works; GitHub accepts either as the JWT issuer)
 #   RENOVATE_BOT_PRIVATE_KEY — the full .pem private key contents
 # With RENOVATE_PLATFORM_COMMIT enabled, Renovate commits through the GitHub API, so
 # GitHub auto-signs the commits ("Verified") with no GPG keys to manage. The default
@@ -57,7 +58,7 @@ jobs:
         id: bot-token
         uses: actions/create-github-app-token@v3
         with:
-          app-id: ${{ secrets.RENOVATE_BOT_ID }}
+          client-id: ${{ secrets.RENOVATE_BOT_ID }}
           private-key: ${{ secrets.RENOVATE_BOT_PRIVATE_KEY }}
 
       - name: Self-hosted Renovate

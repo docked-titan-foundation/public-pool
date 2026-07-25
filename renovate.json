@@ -37,7 +37,7 @@
       "addLabels": ["upstream", "review-required"],
       "automerge": false,
       "minimumReleaseAge": "7 days",
-      "commitBody": "Upstream source bump. Review the diff before merging: this code constructs the block template's coinbase output."
+      "commitBody": "Upstream source bump. Review the diff before merging: this code constructs\nthe block template's coinbase output."
     }
   ],
   "customManagers": [
