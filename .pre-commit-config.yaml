@@ -55,5 +55,5 @@ repos:
         entry: ./scripts/validate-release-config.sh
         language: system
         stages: [pre-commit]
-        files: ^(\.releaserc|scripts/update-versions\.sh|README\.md|\.mise\.toml|scripts/validate-release-config\.sh)$
+        files: ^(release\.config\.js|scripts/update-versions\.sh|README\.md|\.mise\.toml|scripts/validate-release-config\.sh)$
         pass_filenames: false

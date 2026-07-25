@@ -4,11 +4,13 @@ name: CI_CD
 # image has been built, tested, scanned, published by digest, and signed.
 # semantic-release runs twice — once as a side-effect-free `--dry-run` up front
 # (job `detect`) purely to decide whether a release is pending and its version,
-# and once for real at the very end (job `release`) to create the tag, the
-# commit-back and the GitHub release. If any gate in between fails, no release is
-# ever created — no phantom tags, no orphan GitHub releases, no version commit for
-# an image that does not exist. The heavy build only runs when `detect` says a
-# release is actually pending (or a published image needs re-signing).
+# and once for real at the very end (job `release`) to create the tag, the GitHub
+# release, and — on `main` only — the version commit-back (see release.config.js:
+# the @semantic-release/git plugin is added for main and omitted for the ephemeral
+# beta canary). If any gate in between fails, no release is ever created — no
+# phantom tags, no orphan GitHub releases, no version commit for an image that does
+# not exist. The heavy build only runs when `detect` says a release is actually
+# pending (or a published image needs re-signing).
 
 on:
   workflow_dispatch:
@@ -388,12 +390,13 @@ jobs:
             --type spdxjson \
             ghcr.io/${{ github.repository }}@${{ needs.build.outputs.image_digest }}
 
-  # ─── GATE 9: Release — tag, commit, GitHub release. LAST, and only for real. ─
+  # ─── GATE 9: Release — tag, GitHub release, commit-back (main). LAST, for real. ─
   # The image is already built, tested, published by digest, and signed by the
-  # time this runs. semantic-release now creates the tag, the version commit-back
-  # and the GitHub release. If everything above failed, this never runs — so a
-  # tag/release only ever exists for an image that actually shipped. Skipped on a
-  # self-heal rebuild (nothing new to release).
+  # time this runs. semantic-release now creates the tag and the GitHub release
+  # (with the notes attached), and on `main` also commits the version artifacts
+  # back (CHANGELOG + README matrix + .mise.toml) as a single [skip ci] commit.
+  # If everything above failed, this never runs — so a tag/release only ever exists
+  # for an image that actually shipped. Skipped on a self-heal rebuild.
   release:
     needs: [detect, build, attest, sign]
     if: needs.detect.outputs.is_release == 'true'
@@ -423,6 +426,10 @@ jobs:
         with:
           node-version: '24'
 
+      # GPG is needed so the on-`main` commit-back (the @semantic-release/git commit
+      # written by release.config.js) is signed and shows as "Verified". On an
+      # ephemeral `beta` canary release.config.js omits the git plugin, so nothing is
+      # committed and these steps are simply unused.
       - name: Import GPG key
         run: echo -n "$TITAN_RELEASER_BASE64_GPG_KEY" | base64 --decode | gpg --batch --import
         env:
@@ -456,9 +463,10 @@ jobs:
           GIT_COMMITTER_EMAIL: ${{ secrets.TITAN_RELEASER_EMAIL }}
         run: |
           # The dry-run in `detect` already proved a release is pending; this run
-          # makes it official (tag + commit-back + GitHub release). A mismatch
-          # would mean the commit set changed under us — fail loudly rather than
-          # tag something unexpected.
+          # makes it official. On main: tag + GitHub release + a [skip ci] commit-back
+          # (CHANGELOG + version matrix). On an ephemeral beta canary: tag + GitHub
+          # prerelease only. A mismatch would mean the commit set changed under us —
+          # fail loudly rather than tag something unexpected.
           set -o pipefail
           npx semantic-release 2>&1 | tee /tmp/semantic-output.txt
           if ! grep -q 'Published release' /tmp/semantic-output.txt; then

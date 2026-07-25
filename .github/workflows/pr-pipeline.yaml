@@ -35,7 +35,7 @@ jobs:
         run: ./scripts/validate-release-config.sh
 
   # ─── Gate 2: Semantic Release Config Check ─────────────────────────
-  # Validates .releaserc parses and the plugin chain loads. Publishes nothing:
+  # Validates release.config.js loads and the plugin chain resolves. Publishes nothing:
   # --dry-run stops semantic-release itself, --no-ci bypasses the PR guard.
   release-check:
     needs: lint

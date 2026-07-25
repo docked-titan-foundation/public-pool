@@ -65,19 +65,28 @@ Contributions are welcome! Please read this guide to get started.
 
 5. Commit your changes (`git commit -m 'Add my feature'`)
 6. Push to your fork (`git push origin feature/my-feature`)
-7. Open a Pull Request targeting the **`beta`** branch
+7. Open a Pull Request targeting the **`main`** branch
 
-## Beta Testing
+## Prerelease Canaries (on demand)
 
-For pre-release beta testing, all pull requests must target the **beta** branch.
-The beta branch receives pre-release versions before changes are merged into the
-main branch for stable releases.
+`main` is the trunk: merging a release-worthy change to `main` cuts a stable
+release directly. There is **no permanent `beta` branch**. Every release candidate
+is already built, integration-tested, scanned, and signed *before* it is tagged, so
+routine dependency bumps do not need a separate prerelease channel.
 
-- To test beta releases, pull the latest changes from the beta branch
-- Beta versions are published with pre-release tags (e.g., `1.5.0-beta.1`)
-- All features and fixes intended for the next stable release should first be merged
-  into the beta branch for testing
-- Once validated, changes will be promoted from beta to main via the release process
+When a change is risky enough to want a **runnable** prerelease image first — in
+practice, an upstream `public-pool` bump, since that code builds the block
+template's coinbase output — cut a throwaway prerelease branch:
+
+1. `git switch -c beta main` and push it.
+2. Land the risky change on `beta` (merge the Renovate PR into `beta` instead of
+   `main`). CI publishes a `X.Y.Z-beta.N` tag and the `beta-latest` image.
+3. Canary `beta-latest` for as long as you need.
+4. When satisfied, merge `beta` → `main` (which cuts the stable release), then
+   delete the branch: `git push origin --delete beta`.
+
+Recreate `beta` the same way next time. Because it never lives longer than a
+canary cycle, it cannot accumulate release commits or drift from `main`.
 
 ## Semantic Release (SR) Process
 
@@ -87,24 +96,28 @@ standards with Angular-style formatting.
 
 ### Branch Strategy
 
-- **`main` branch**: Stable releases only. Direct pushes to main are restricted;
-  all changes flow through the beta branch first.
-- **`beta` branch**: Pre-release testing ground. Features and fixes are merged here
-  for beta testing before promotion to main.
+- **`main` branch**: the trunk and the only permanent branch. Stable releases are
+  cut from here. Direct pushes are restricted; changes land via PR (the release
+  bot bypasses the restriction to push tags).
+- **`beta` branch**: **ephemeral**, created on demand only to canary a risky bump,
+  and deleted after promotion. See *Prerelease Canaries* above. Renovate does not
+  target it — it opens PRs against `main`.
 
 ### Versioning
 
-Version bumps are tied to Dockerfile sub-tool version changes. A release only produces
-a new version tag when at least one tool version in the Dockerfile has changed:
+Version bumps are tied to changes in the Docker image's inputs, enforced by the
+`releaseRules` in `release.config.js` (only the `public-pool` and `dependencies` scopes
+release):
 
-- **Patch release** (`1.0.X`): Sub-tool patch version changes
-  (e.g., `HELM_VERSION` from `4.1.4` → `4.1.5`)
-- **Minor release** (`1.X.0`): Sub-tool minor version changes
-  (e.g., `KUBECTL_VERSION` from `1.33.9` → `1.34.0`)
-- **Major release** (`X.0.0`): Sub-tool major version changes or breaking changes
-  (e.g., `HELMFILE_VERSION` from `1.4.4` → `2.0.0`)
+- **Patch release** (`1.0.X`): a Dockerfile dependency bump, e.g. the Node base
+  image (`fix(dependencies): bump NODE_BASE …`)
+- **Minor release** (`1.X.0`): an upstream public-pool source bump
+  (`feat(public-pool): …`)
+- **Major release** (`X.0.0`): a `BREAKING CHANGE:` footer on either of those
+  scopes (the `!` shorthand is not recognised — see *Conventional Commits*)
 
-Beta releases use pre-release tags (e.g., `1.5.0-beta.0`, `1.5.0-beta.1`).
+Prerelease canaries use pre-release tags (e.g., `1.5.0-beta.0`, `1.5.0-beta.1`)
+while a `beta` branch exists.
 
 ### Conventional Commits
 
@@ -114,23 +127,26 @@ specification with Angular-style formatting:
 - Format: `<type>(<scope>): <description>`
 - Types: `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `chore`, `ci`, `build`, `revert`
 - Scope indicates the affected pipeline/tool (e.g., `pipeline`, `docker`, `helm`, etc.)
-- Breaking changes must be indicated with `!` after type/scope or `BREAKING CHANGE:` in footer
-- Example: `feat(pipeline): add beta branch support`
+- Breaking changes must be indicated with a `BREAKING CHANGE:` footer. The Angular
+  preset in use does **not** recognise the `!` shorthand — a `feat(x)!:` header is
+  parsed as an ordinary commit and will **not** trigger a major release.
+- Example: `fix(dependencies): bump NODE_BASE to 24.16.1`
 
 ### Commit Types and Release Rules
 
-Commits are categorized into two groups for release triggering:
+Commits are categorized into two groups for release triggering. **Release
+triggering is scope-gated** (enforced by `releaseRules` in `release.config.js`): only the
+`public-pool` and `dependencies` scopes can produce a release. A `feat`/`fix`/`perf`
+on any other scope — or with no scope — is treated as a non-release commit, no
+matter its type.
 
-**Version-bumping commits** — These trigger a release based on the sub-tool version change:
+**Version-bumping commits** — Only these two forms trigger a release:
 
-- Use `feat` for new sub-tool capabilities or minor version bumps
-  (e.g., `feat(docker): bump HELM_VERSION 4.1.4 → 4.1.5` results in
-  patch release when only patch level changes)
-- Use `fix` for sub-tool bug fixes or patch version bumps
-  (e.g., `fix(docker): update KUBECTL_VERSION 1.33.9 → 1.33.10`)
-- Use `perf` for sub-tool performance-related updates
-- Use `feat!` or `BREAKING CHANGE:` footer for major version bumps
-  or breaking changes
+- `feat(public-pool): ...` — an upstream public-pool source bump → **minor**
+- `fix(dependencies): ...` — a Dockerfile dependency bump, e.g. the Node base
+  image (`ARG NODE_BASE`) → **patch**
+- A `BREAKING CHANGE:` footer on either of those scopes → **major**
+  (the `!` shorthand does not work — see Conventional Commits above)
 
 **Non-release commits** — These improve the project without triggering a release. Use for:
 
@@ -144,11 +160,17 @@ Commits are categorized into two groups for release triggering:
 
 ### Release Triggers
 
-- A new release is triggered automatically on push to `main` or `beta` branches
+- A new release is triggered automatically on push to `main` (or an on-demand
+  `beta` canary branch)
 - `semantic-release` analyzes commits since the last tag to determine the version bump
-- The version matrix is auto-generated based on Dockerfile sub-tool versions
-- Versions in other places (labels, configs, etc.) are updated automatically
-- Changelog is auto-generated from commit messages
+- **Commit-back is `main`-only.** On `main`, `@semantic-release/git` commits the
+  release artifacts back — `CHANGELOG.md`, the README version matrix and the
+  `.mise.toml` `VERSION` — as a single `[skip ci]` commit. This is configured in
+  `release.config.js`, which adds the commit-back plugins (`changelog` + `exec` +
+  `git`) only when the release runs on `main`.
+- The ephemeral **`beta` canary commits nothing** (those plugins are omitted for
+  it), so it never accumulates release commits and merges back into `main` cleanly.
+  With no permanent second branch and a commit-free canary, `main` cannot diverge.
 - Docker images are built, tested, scanned, signed, and pushed to GitHub Container Registry
 - SBOM (Software Bill of Materials) is generated and signed for each release
 
