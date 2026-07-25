@@ -1,3 +1,10 @@
+## [1.0.1](https://github.com/docked-titan-foundation/public-pool/compare/v1.0.0...v1.0.1) (2026-07-25)
+
+
+### Bug Fixes
+
+* **dependencies:** update node.js to v24.18.0 ([f315ea9](https://github.com/docked-titan-foundation/public-pool/commit/f315ea96f4f0f514539f4198691d2b565c3dee0b))
+
 # 1.0.0 (2026-07-23)
 
 
