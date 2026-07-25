@@ -2,7 +2,9 @@ name: Renovate
 
 # Self-hosted Renovate (issue #1). The Mend-hosted Renovate app is not installed
 # on this repo, so we run the same engine ourselves on a schedule. It reuses the
-# existing renovate.json unchanged and opens dependency PRs against `beta`.
+# existing renovate.json unchanged and opens dependency PRs against `main` (the
+# trunk). A prerelease `beta` branch is only spun up on demand to canary a risky
+# upstream bump — see CONTRIBUTING.md — so Renovate does not target it.
 #
 # Runs under a dedicated GitHub App bot. The workflow mints a short-lived
 # installation token from two repository secrets:

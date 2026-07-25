@@ -1,59 +1,85 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-RELEASERC=".releaserc"
+CONFIG="release.config.js"
 EXIT=0
 
 echo "🔍 Validating semantic release configuration..."
 
-# 1. Check .releaserc exists
-if [ ! -f "$RELEASERC" ]; then
-  echo "❌ Error: $RELEASERC not found"
+# 1. Config exists
+if [ ! -f "$CONFIG" ]; then
+  echo "❌ Error: $CONFIG not found"
   exit 1
 fi
 
-# 2. Validate JSON syntax
-if ! node -e "JSON.parse(require('fs').readFileSync('$RELEASERC','utf8'))" 2>/dev/null; then
-  echo "❌ Error: $RELEASERC contains invalid JSON"
+# 2. Config loads as a module
+if ! node -e "require('./$CONFIG')" 2>/dev/null; then
+  echo "❌ Error: $CONFIG failed to load:"
+  node -e "require('./$CONFIG')" || true
   exit 1
 fi
 
-# 3. Validate assets from @semantic-release/git plugin exist
-ASSETS=$(node -e "
-const cfg = JSON.parse(require('fs').readFileSync('$RELEASERC','utf8'));
-const gitPlugin = cfg.plugins.find(p => Array.isArray(p) && p[0] === '@semantic-release/git');
-if (gitPlugin) console.log(gitPlugin[1].assets.join(' '));
-" 2>/dev/null || true)
-
-if [ -n "$ASSETS" ]; then
-  echo "📦 Checking git plugin assets..."
-  for asset in $ASSETS; do
-    if [ ! -f "$asset" ]; then
-      echo "❌ Error: Asset file '$asset' referenced in @semantic-release/git does not exist"
-      EXIT=1
-    fi
-  done
-else
-  echo "⚠️  Warning: No assets found in @semantic-release/git plugin"
-fi
-
-# 4. Validate prepareCmd from @semantic-release/exec plugin uses nextRelease.version
-PREPARE_SCRIPT=$(RELEASERC="$RELEASERC" node -e '
-const cfg = JSON.parse(require("fs").readFileSync(process.env.RELEASERC, "utf8"));
-const execPlugin = cfg.plugins.find(p => Array.isArray(p) && p[0] === "@semantic-release/exec");
-if (execPlugin && execPlugin[1].prepareCmd) {
-  const match = execPlugin[1].prepareCmd.match(/\$\{nextRelease\.version\}/);
-  if (match) console.log("prepareCmd uses nextRelease.version placeholder");
+# release.config.js branches on GITHUB_REF_NAME: the commit-back plugins
+# (changelog + exec + git) are added for `main` and omitted for the ephemeral
+# `beta` canary. Inspect the resolved plugin list for each branch.
+plugins_for() {
+  GITHUB_REF_NAME="$1" node -e "
+    const c = require('./$CONFIG');
+    console.log(c.plugins.map(p => Array.isArray(p) ? p[0] : p).join('\n'));
+  "
 }
-' 2>/dev/null || true)
 
-if [ "$PREPARE_SCRIPT" = "prepareCmd uses nextRelease.version placeholder" ]; then
-  echo "✅ @semantic-release/exec prepareCmd is correctly configured"
+MAIN_PLUGINS="$(plugins_for main)"
+BETA_PLUGINS="$(plugins_for beta)"
+
+# 3. main must commit the version artifacts back, and the assets must exist.
+echo "📦 Checking main-branch commit-back..."
+for p in @semantic-release/changelog @semantic-release/exec @semantic-release/git; do
+  if ! grep -qxF "$p" <<<"$MAIN_PLUGINS"; then
+    echo "❌ Error: $p missing from the main-branch plugin set"
+    EXIT=1
+  fi
+done
+
+ASSETS=$(GITHUB_REF_NAME=main node -e "
+  const c = require('./$CONFIG');
+  const git = c.plugins.find(p => Array.isArray(p) && p[0] === '@semantic-release/git');
+  if (git) console.log((git[1].assets || []).join(' '));
+" 2>/dev/null || true)
+for asset in $ASSETS; do
+  if [ ! -f "$asset" ]; then
+    echo "❌ Error: @semantic-release/git asset '$asset' does not exist"
+    EXIT=1
+  fi
+done
+[ $EXIT -eq 0 ] && echo "✅ main commits back (CHANGELOG + matrix); assets present"
+
+# 4. The ephemeral beta canary must commit NOTHING, so it merges into main cleanly.
+echo "🔎 Checking the beta canary stays commit-free..."
+FORBIDDEN_ON_BETA=""
+for p in @semantic-release/changelog @semantic-release/exec @semantic-release/git; do
+  if grep -qxF "$p" <<<"$BETA_PLUGINS"; then
+    FORBIDDEN_ON_BETA="$FORBIDDEN_ON_BETA $p"
+  fi
+done
+if [ -n "$FORBIDDEN_ON_BETA" ]; then
+  echo "❌ Error: commit-back plugin(s) active on beta:$FORBIDDEN_ON_BETA"
+  echo "   The ephemeral canary must commit nothing (see release.config.js)."
+  EXIT=1
 else
-  echo "⚠️  Warning: @semantic-release/exec prepareCmd may not be using nextRelease.version"
+  echo "✅ beta canary is commit-free"
 fi
 
-# 5. Try a dry-run (if git environment is suitable)
+# 5. Required base plugins must be present on every branch.
+echo "🔎 Checking required plugins..."
+for p in @semantic-release/commit-analyzer @semantic-release/release-notes-generator @semantic-release/github; do
+  if ! grep -qxF "$p" <<<"$BETA_PLUGINS"; then
+    echo "❌ Error: required plugin $p missing"
+    EXIT=1
+  fi
+done
+
+# 6. Try a dry-run (config load smoke test; tolerant of local git state).
 echo ""
 echo "🧪 Running semantic-release dry-run (configuration check only)..."
 if npx semantic-release --dry-run --no-ci 2>&1 | tee /tmp/sr-dry-run.log; then
