@@ -250,7 +250,8 @@ public-pool revision baked into it.
 
 | Version | Upstream commit | Node | Date |
 |---|---|---|---|
-| 1.0.1 (latest) | `96a9202c11de` | 24.18.0-bookworm-slim | 2026-07-25 |
+| 1.0.2 (latest) | `96a9202c11de` | 24.18.1-bookworm-slim | 2026-08-03 |
+| 1.0.1 | `96a9202c11de` | 24.18.0-bookworm-slim | 2026-07-25 |
 | 1.0.0 | `96a9202c11de` | 24.16.0-bookworm-slim | 2026-07-23 |
 
 ### Beta Releases
