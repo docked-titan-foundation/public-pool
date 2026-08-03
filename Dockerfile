@@ -93,14 +93,16 @@ RUN mkdir -p /public-pool/DB && chown -R node:node /public-pool
 # unlike upstream we do not EXPOSE 8332.
 EXPOSE 3333 3334
 
-USER node
+# Numeric so runAsNonRoot admission can read the uid off the image without
+# resolving /etc/passwd; 1000:1000 is the node user shipped by the base image.
+USER 1000:1000
 
 ENV NODE_ENV=production
 
 # The API answering means the NestJS app is up; the stratum listener is bound in
 # the same process, so this covers both.
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
-    CMD node -e "fetch('http://127.0.0.1:'+(process.env.API_PORT||3334)+'/api/info').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+    CMD ["node", "-e", "fetch('http://127.0.0.1:'+(process.env.API_PORT||3334)+'/api/info').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
 
 ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["node", "dist/main"]
