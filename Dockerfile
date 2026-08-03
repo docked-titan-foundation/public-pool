@@ -5,7 +5,7 @@
 # source at a pinned commit. The commit SHA is the integrity check: git is
 # content-addressed, so checking out a full SHA cannot silently give us
 # different code the way a mutable tag or a re-generated tarball can.
-ARG NODE_BASE=node:24.18.0-bookworm-slim@sha256:6f7b03f7c2c8e2e784dcf9295400527b9b1270fd37b7e9a7285cf83b6951452d
+ARG NODE_BASE=node:24.18.1-bookworm-slim@sha256:235600a8101ab264e117b1768e925532262668dc9b581ef1dd7d96ced463b8e7
 # hadolint ignore=DL3006
 FROM ${NODE_BASE} AS build
 
