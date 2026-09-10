@@ -1,3 +1,11 @@
+## [1.0.3](https://github.com/docked-titan-foundation/public-pool/compare/v1.0.2...v1.0.3) (2026-09-10)
+
+
+### Bug Fixes
+
+* **dependencies:** update node.js to v24.19.0 ([f24e4e0](https://github.com/docked-titan-foundation/public-pool/commit/f24e4e06e64308eaad9ac496dc81d777ba8501e9))
+* **docker:** satisfy hadolint 2.15.0 DL3066 and DL3025 ([30821fd](https://github.com/docked-titan-foundation/public-pool/commit/30821fd509548243d13788f5d3e666e53cba5aeb))
+
 ## [1.0.2](https://github.com/docked-titan-foundation/public-pool/compare/v1.0.1...v1.0.2) (2026-08-03)
 
 
